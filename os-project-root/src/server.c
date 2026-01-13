@@ -132,11 +132,41 @@ void handle_client_session(int client_socket, int player_id) {
     close(client_socket);
 }
 
+//Helper
+void load_scores() {
+    FILE *fp = fopen("scores.txt", "r");
+    if (!fp) {
+        printf("[Server] No scores found. Starting fresh.\n");
+        return;
+    }
+    
+    // Simple format: Name Score
+    char name[32];
+    int score;
+    while (fscanf(fp, "%s %d", name, &score) != EOF) {
+        // In a real app, you'd map this to specific players
+        // For now, just print it to prove it works
+        printf("[Persistence] Loaded score: %s = %d\n", name, score);
+    }
+    fclose(fp);
+}
+
+void save_score(char *name, int score) {
+    // Member 1 Task: Append winning score to file
+    FILE *fp = fopen("scores.txt", "a"); // 'a' for append
+    if (fp) {
+        fprintf(fp, "%s %d\n", name, score);
+        fclose(fp);
+        printf("[Persistence] Saved score for %s\n", name);
+    }
+}
+
 // --- 3. MAIN LOOP (Rubric: Multiprocessing - Excellent) ---
 int main() {
     setup_signals();         // Step 1: Handle Zombies
     setup_shared_memory();   // Step 2: Create SHM + Mutexes
-    
+    load_scores();
+
     int server_fd = setup_server_socket();
     printf("[Server] Listening on port %d...\n", PORT);
 
