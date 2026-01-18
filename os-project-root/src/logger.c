@@ -1,1 +1,1 @@
-# Logger thread logic (Member 4)
+// Logger thread logic (Member 4)
