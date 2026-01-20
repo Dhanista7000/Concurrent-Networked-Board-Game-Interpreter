@@ -161,11 +161,48 @@ void save_score(char *name, int score) {
     }
 }
 
+// Round Robin Logic
+
+void* scheduler_thread(void* arg) {
+    printf("[Scheduler] Round Robin Thread Started.\n");
+    
+    while (1) {
+        pthread_mutex_lock(&game_state->mutex);
+
+        // Only manage turns if the game has actually started
+        if (game_state->status == GAME_START || game_state->status == PLAYER_TURN) {
+            
+            // Round Robin Logic: Move to next active player
+            int next_turn = (game_state->current_turn_index + 1) % game_state->player_count;
+            game_state->current_turn_index = next_turn;
+            game_state->status = PLAYER_TURN;
+
+            printf("[Scheduler] It is now Player %d's turn.\n", game_state->current_turn_index);
+
+            // Signal all child processes that the turn has changed
+            pthread_cond_broadcast(&game_state->turn_cond);
+        }
+
+        pthread_mutex_unlock(&game_state->mutex);
+        
+        // The "Time Slice": Wait 5 seconds for the player to make a move
+        sleep(5); 
+    }
+    return NULL;
+}
+
 // --- 3. MAIN LOOP (Rubric: Multiprocessing - Excellent) ---
 int main() {
     setup_signals();         // Step 1: Handle Zombies
     setup_shared_memory();   // Step 2: Create SHM + Mutexes
     load_scores();
+
+    // --- START SCHEDULER THREAD ---
+    pthread_t rr_thread;
+    if (pthread_create(&rr_thread, NULL, scheduler_thread, NULL) != 0) {
+        perror("Failed to create scheduler thread");
+        exit(1);
+    }
 
     int server_fd = setup_server_socket();
     printf("[Server] Listening on port %d...\n", PORT);
