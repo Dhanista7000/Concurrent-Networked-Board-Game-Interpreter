@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 // --- Constants ---
+#define PORT 8080
 #define MAX_PLAYERS 5           // Constraint: 3 to 5 players [cite: 24]
 #define MIN_PLAYERS 3
 #define DECK_SIZE 52
@@ -45,6 +46,7 @@ typedef struct {
     // MUST be initialized with PTHREAD_PROCESS_SHARED 
     pthread_mutex_t mutex;      
     pthread_cond_t turn_cond;   // To signal players when it's their move
+    pthread_cond_t turn_complete_cond; // (IM DONE BELL)
     
     // Game Data
     Player players[MAX_PLAYERS];

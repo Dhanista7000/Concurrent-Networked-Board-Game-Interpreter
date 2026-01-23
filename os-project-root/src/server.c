@@ -15,8 +15,6 @@
 // Include the shared header we defined earlier
 #include "common.h"
 
-#define PORT 8080
-
 // Global pointer to shared memory (accessible by signal handlers if needed)
 SharedState *game_state;
 
@@ -39,6 +37,38 @@ void setup_signals() {
 }
 
 // --- 2. SHARED MEMORY & MUTEX SETUP (Rubric: IPC & Sync - Excellent) ---
+// DECK Management 
+void init_deck() {
+    char suits[] = {'H', 'D', 'C', 'S'};
+    int index = 0;
+    
+    // 1. Fill the deck
+    for (int s = 0; s < 4; s++) {
+        for (int v = 2; v <= 14; v++) { // 2 to Ace (14)
+            game_state->deck[index].suit = suits[s];
+            game_state->deck[index].value = v;
+            index++;
+        }
+    }
+    
+    // 2. Shuffle (Fisher-Yates Algorithm)
+    // We use srand(time(0)) in main() so this is random every time
+    for (int i = 0; i < 52; i++) {
+        int r = rand() % 52;
+        Card temp = game_state->deck[i];
+        game_state->deck[i] = game_state->deck[r];
+        game_state->deck[r] = temp;
+    }
+    
+    game_state->deck_top_index = 0; // Start at top of deck
+    printf("[Game Logic] Deck initialized and shuffled.\n");
+
+    // CHEAT MODE: Force the first card to be an Ace of Spades (Value 14)
+    // game_state->deck[0].value = 14; 
+    // game_state->deck[0].suit = 'S';
+
+    // printf("[Game Logic] Deck initialized (RIGGED FOR TESTING).\n");    
+}
 // Initializes memory accessible by all forked processes[cite: 62, 70].
 void setup_shared_memory() {
     // A. Create/Open Shared Memory Object
@@ -63,6 +93,7 @@ void setup_shared_memory() {
 
     // D. Initialize Synchronization Primitives (CRITICAL STEP)
     // We must use PTHREAD_PROCESS_SHARED so mutexes work across fork()[cite: 70, 130].
+    // Inside setup_shared_memory()
     pthread_mutexattr_t mutexAttr;
     pthread_condattr_t condAttr;
 
@@ -75,6 +106,9 @@ void setup_shared_memory() {
     // Initialize the actual mutex and condition variable in shared memory
     pthread_mutex_init(&game_state->mutex, &mutexAttr);
     pthread_cond_init(&game_state->turn_cond, &condAttr);
+    
+    // NEW: Initialize the "Player Done" signal
+    pthread_cond_init(&game_state->turn_complete_cond, &condAttr);
 
     // Initialize Game State Data
     game_state->player_count = 0;
@@ -118,20 +152,6 @@ int setup_server_socket() {
     return server_fd;
 }
 
-// --- Placeholder for Member 2's Logic ---
-void handle_client_session(int client_socket, int player_id) {
-    // Member 2 will fill this in.
-    // For now, we just print a message so you can test connection.
-    printf("[Child Process %d] Handling Player %d.\n", getpid(), player_id);
-    
-    // Simulate game loop
-    while(1) {
-        sleep(5); 
-        // Logic will go here...
-    }
-    close(client_socket);
-}
-
 //Helper
 void load_scores() {
     FILE *fp = fopen("scores.txt", "r");
@@ -161,32 +181,137 @@ void save_score(char *name, int score) {
     }
 }
 
+
+// --- CLIENT HANDLER (CHILD PROCESS) ---
+void handle_client_session(int client_socket, int player_id) {
+    char buffer[1024];
+    int read_size;
+
+    // Send Welcome Message
+    snprintf(buffer, sizeof(buffer), "Welcome Player %d! Waiting for game to start...\n", player_id);
+    send(client_socket, buffer, strlen(buffer), 0);
+
+    while (1) {
+        // --- SYNCHRONIZATION POINT ---
+        // Lock the mutex to check the Shared Memory safely
+        pthread_mutex_lock(&game_state->mutex);
+
+        // Wait here until the Scheduler says "Something changed!"
+        // pthread_cond_wait releases the lock while waiting, and re-acquires it when signaled.
+        pthread_cond_wait(&game_state->turn_cond, &game_state->mutex);
+
+        // 1. Check if it's MY turn
+        if (game_state->current_turn_index == player_id && game_state->status == PLAYER_TURN) {
+            
+            // Tell Client it's their turn
+            memset(buffer, 0, 1024);
+            sprintf(buffer, "YOUR_TURN\n"); // Simple protocol message
+            send(client_socket, buffer, strlen(buffer), 0);
+            
+            printf("[Child %d] Told Player %d it's their turn. Waiting for input...\n", getpid(), player_id);
+
+            // Unlock while waiting for network input (so other processes aren't blocked)
+            pthread_mutex_unlock(&game_state->mutex);
+
+            // 2. Wait for Client Response (Blocking Read)
+            // The client MUST send "DRAW" or "PASS"
+            read_size = recv(client_socket, buffer, 1024, 0);
+            if (read_size > 0) {
+                buffer[read_size] = '\0'; // Null-terminate
+                
+                // Re-lock to update game state
+                pthread_mutex_lock(&game_state->mutex);
+                
+                if (strncmp(buffer, "DRAW", 4) == 0) {
+                    // Logic: Take card from deck
+                    int card_idx = game_state->deck_top_index++;
+                    Card drawn = game_state->deck[card_idx];
+
+                    // --- MEMBER 3: WIN CONDITION & PERSISTENCE ---
+                    // Rule: If Card Value is 13 (King) or 14 (Ace), they WIN.
+                    if (drawn.value >= 13) {
+                         printf("\n!!! PLAYER %d WINS with %d%c !!!\n", player_id, drawn.value, drawn.suit);
+                         
+                         // 1. Save Score to File (Persistence)
+                         char p_name[32];
+                         sprintf(p_name, "Player%d", player_id);
+                         save_score(p_name, 100); // Save 100 points
+                         
+                         // 2. Notify the Client
+                         char win_msg[] = "YOU WON! Game Over.\n";
+                         send(client_socket, win_msg, strlen(win_msg), 0);
+                         
+                         // 3. IMPORTANT: Unlock Mutex before exiting!
+                         // If we exit while holding the lock, the whole game freezes.
+                         pthread_mutex_unlock(&game_state->mutex);
+                         
+                         close(client_socket);
+                         exit(0); // Kill this child process (Player leaves table)
+                    }
+                    // ---------------------------------------------
+                    
+                    printf("[Game Logic] Player %d drew %d%c\n", player_id, drawn.value, drawn.suit);
+                    
+                    // Send feedback to client
+                    char msg[64];
+                    sprintf(msg, "YOU DREW: %d%c\n", drawn.value, drawn.suit);
+                    send(client_socket, msg, strlen(msg), 0);
+                }
+                else {
+                    printf("[Game Logic] Player %d passed.\n", player_id);
+                }
+
+                // --- NEW: RING THE BELL ---
+                // Tell the Scheduler: "I am done, you can switch turns now."
+                printf("[Child %d] Player %d finished turn. Signaling Scheduler.\n", getpid(), player_id);
+                pthread_cond_signal(&game_state->turn_complete_cond);                
+                
+                // End turn manually (optional, or wait for Scheduler timeout)
+                // For now, we just wait for the Scheduler to rotate.
+            }
+        }
+
+        // Always unlock before repeating the loop
+        pthread_mutex_unlock(&game_state->mutex);
+    }
+    
+    close(client_socket);
+}
+
 // Round Robin Logic
 
 void* scheduler_thread(void* arg) {
-    printf("[Scheduler] Round Robin Thread Started.\n");
+    printf("[Scheduler] Round Robin Thread Started. Waiting for Game Start...\n");
     
     while (1) {
         pthread_mutex_lock(&game_state->mutex);
 
-        // Only manage turns if the game has actually started
+        // If the game hasn't started, just wait a bit and check again
+        if (game_state->status == WAITING_FOR_PLAYERS) {
+            pthread_mutex_unlock(&game_state->mutex);
+            sleep(1); 
+            continue;
+        }
+
+        // --- ROUND ROBIN LOGIC ---
         if (game_state->status == GAME_START || game_state->status == PLAYER_TURN) {
             
-            // Round Robin Logic: Move to next active player
+            // 1. Move to next active player
             int next_turn = (game_state->current_turn_index + 1) % game_state->player_count;
             game_state->current_turn_index = next_turn;
             game_state->status = PLAYER_TURN;
 
             printf("[Scheduler] It is now Player %d's turn.\n", game_state->current_turn_index);
 
-            // Signal all child processes that the turn has changed
+            // 2. Wake up all players so the correct one can take their turn
             pthread_cond_broadcast(&game_state->turn_cond);
+
+            // 3. CRITICAL CHANGE: WAIT HERE until the player finishes!
+            // This replaces sleep(5). The scheduler sleeps until turn_complete_cond is rung.
+            pthread_cond_wait(&game_state->turn_complete_cond, &game_state->mutex);
         }
 
         pthread_mutex_unlock(&game_state->mutex);
-        
-        // The "Time Slice": Wait 5 seconds for the player to make a move
-        sleep(5); 
     }
     return NULL;
 }
@@ -195,6 +320,7 @@ void* scheduler_thread(void* arg) {
 int main() {
     setup_signals();         // Step 1: Handle Zombies
     setup_shared_memory();   // Step 2: Create SHM + Mutexes
+    init_deck(); // Deck
     load_scores();
 
     // --- START SCHEDULER THREAD ---
@@ -263,6 +389,16 @@ int main() {
             // --- PARENT PROCESS ---
             close(client_socket); // Parent doesn't need the client socket
             // Loop back to accept()
+            // CHECK IF WE CAN START THE GAME
+             pthread_mutex_lock(&game_state->mutex);
+             if (game_state->player_count >= 3 && game_state->status == WAITING_FOR_PLAYERS) {
+                 game_state->status = GAME_START;
+                 printf("[Server] 3 Players connected. STARTING GAME!\n");
+                 
+                 // Wake up the scheduler
+                 pthread_cond_broadcast(&game_state->turn_cond); 
+             }
+             pthread_mutex_unlock(&game_state->mutex);            
         }
     }
 
