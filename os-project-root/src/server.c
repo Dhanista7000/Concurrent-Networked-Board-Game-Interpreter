@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
+#include <time.h>
 
 // Include the shared header we defined earlier
 #include "common.h"
@@ -172,12 +173,21 @@ void load_scores() {
 }
 
 void save_score(char *name, int score) {
-    // Member 1 Task: Append winning score to file
-    FILE *fp = fopen("scores.txt", "a"); // 'a' for append
+    FILE *fp = fopen("scores.txt", "a"); 
     if (fp) {
-        fprintf(fp, "%s %d\n", name, score);
+        // --- Get Current Time ---
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        char timestamp[20];
+        
+        // Formats time as: YYYY-MM-DD HH:MM:SS
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", t);
+
+        // --- Write to File with Timestamp ---
+        fprintf(fp, "[%s] Winner: %s | Score: %d\n", timestamp, name, score);
+        
         fclose(fp);
-        printf("[Persistence] Saved score for %s\n", name);
+        printf("[Persistence] Saved score with timestamp for %s\n", name);
     }
 }
 
@@ -188,7 +198,7 @@ void handle_client_session(int client_socket, int player_id) {
     int read_size;
 
     // Send Welcome Message
-    snprintf(buffer, sizeof(buffer), "Welcome Player %d! Waiting for game to start...\n", player_id);
+    snprintf(buffer, sizeof(buffer), "Welcome Player %d! Waiting for game to start...\n", player_id + 1);
     send(client_socket, buffer, strlen(buffer), 0);
 
     while (1) {
@@ -208,7 +218,7 @@ void handle_client_session(int client_socket, int player_id) {
             sprintf(buffer, "YOUR_TURN\n"); // Simple protocol message
             send(client_socket, buffer, strlen(buffer), 0);
             
-            printf("[Child %d] Told Player %d it's their turn. Waiting for input...\n", getpid(), player_id);
+            printf("[Child %d] Told Player %d it's their turn. Waiting for input...\n", getpid(), player_id + 1);
 
             // Unlock while waiting for network input (so other processes aren't blocked)
             pthread_mutex_unlock(&game_state->mutex);
@@ -230,11 +240,11 @@ void handle_client_session(int client_socket, int player_id) {
                     // --- MEMBER 3: WIN CONDITION & PERSISTENCE ---
                     // Rule: If Card Value is 13 (King) or 14 (Ace), they WIN.
                     if (drawn.value >= 13) {
-                         printf("\n!!! PLAYER %d WINS with %d%c !!!\n", player_id, drawn.value, drawn.suit);
+                         printf("\n!!! PLAYER %d WINS with %d%c !!!\n", player_id + 1, drawn.value, drawn.suit);
                          
                          // 1. Save Score to File (Persistence)
                          char p_name[32];
-                         sprintf(p_name, "Player%d", player_id);
+                         sprintf(p_name, "Player%d", player_id + 1);
                          save_score(p_name, 100); // Save 100 points
                          
                          // 2. Notify the Client
@@ -250,7 +260,7 @@ void handle_client_session(int client_socket, int player_id) {
                     }
                     // ---------------------------------------------
                     
-                    printf("[Game Logic] Player %d drew %d%c\n", player_id, drawn.value, drawn.suit);
+                    printf("[Game Logic] Player %d drew %d%c\n", player_id + 1, drawn.value, drawn.suit);
                     
                     // Send feedback to client
                     char msg[64];
@@ -258,12 +268,12 @@ void handle_client_session(int client_socket, int player_id) {
                     send(client_socket, msg, strlen(msg), 0);
                 }
                 else {
-                    printf("[Game Logic] Player %d passed.\n", player_id);
+                    printf("[Game Logic] Player %d passed.\n", player_id + 1);
                 }
 
                 // --- NEW: RING THE BELL ---
                 // Tell the Scheduler: "I am done, you can switch turns now."
-                printf("[Child %d] Player %d finished turn. Signaling Scheduler.\n", getpid(), player_id);
+                printf("[Child %d] Player %d finished turn. Signaling Scheduler.\n", getpid(), player_id + 1);
                 pthread_cond_signal(&game_state->turn_complete_cond);                
                 
                 // End turn manually (optional, or wait for Scheduler timeout)
@@ -301,7 +311,7 @@ void* scheduler_thread(void* arg) {
             game_state->current_turn_index = next_turn;
             game_state->status = PLAYER_TURN;
 
-            printf("[Scheduler] It is now Player %d's turn.\n", game_state->current_turn_index);
+            printf("[Scheduler] It is now Player %d's turn.\n", game_state->current_turn_index + 1);
 
             // 2. Wake up all players so the correct one can take their turn
             pthread_cond_broadcast(&game_state->turn_cond);
@@ -318,6 +328,10 @@ void* scheduler_thread(void* arg) {
 
 // --- 3. MAIN LOOP (Rubric: Multiprocessing - Excellent) ---
 int main() {
+
+    // Seed the Random Generator 
+    srand(time(NULL));
+
     setup_signals();         // Step 1: Handle Zombies
     setup_shared_memory();   // Step 2: Create SHM + Mutexes
     init_deck(); // Deck
@@ -361,7 +375,7 @@ int main() {
         game_state->players[new_player_id].is_active = 1;
         game_state->players[new_player_id].pid = 0; // Will be set by child
         
-        printf("[Server] Accepted connection. Assigned Player ID: %d\n", new_player_id);
+        printf("[Server] Accepted connection. Assigned Player ID: %d\n", new_player_id + 1);
         pthread_mutex_unlock(&game_state->mutex);
 
         // C. FORK [cite: 33]
