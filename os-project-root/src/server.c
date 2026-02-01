@@ -19,6 +19,11 @@
 // Global pointer to shared memory (accessible by signal handlers if needed)
 SharedState *game_state;
 
+// --- ADD THESE PROTOTYPES HERE ---
+void log_event(char *msg);
+void* logger_thread(void* arg);
+// ---------------------------------
+
 // --- 1. ZOMBIE REAPER (Rubric: Multiprocessing - Excellent) ---
 // Handles SIGCHLD to clean up child processes when players disconnect[cite: 34].
 void handle_sigchld(int sig) {
@@ -115,6 +120,14 @@ void setup_shared_memory() {
     game_state->player_count = 0;
     game_state->status = WAITING_FOR_PLAYERS;
     game_state->current_turn_index = 0;
+
+    // --- NEW: Logger Initialization ---
+    pthread_mutex_init(&game_state->log_mutex, &mutexAttr);
+    pthread_cond_init(&game_state->log_cond, &condAttr);
+    
+    game_state->log_in = 0;
+    game_state->log_out = 0;
+    game_state->log_count = 0;    
     
     printf("[Server] Shared Memory & Process-Shared Mutexes Initialized.\n");
 }
@@ -173,21 +186,32 @@ void load_scores() {
 }
 
 void save_score(char *name, int score) {
+    printf("[Persistence] Attempting to save score for %s...\n", name);
+    
     FILE *fp = fopen("scores.txt", "a"); 
     if (fp) {
-        // --- Get Current Time ---
         time_t now = time(NULL);
         struct tm *t = localtime(&now);
-        char timestamp[20];
+        char timestamp[64]; // Increased size just to be safe
         
-        // Formats time as: YYYY-MM-DD HH:MM:SS
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", t);
+        if (t) {
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", t);
+        } else {
+            strcpy(timestamp, "UNKNOWN_TIME");
+        }
 
-        // --- Write to File with Timestamp ---
         fprintf(fp, "[%s] Winner: %s | Score: %d\n", timestamp, name, score);
         
+        // --- THE FIX ---
+        fflush(fp);          // 1. Force C buffer to OS
+        int fd = fileno(fp); // 2. Get the underlying file descriptor
+        fsync(fd);           // 3. Force OS buffer to Physical Disk
+        // ----------------
+        
         fclose(fp);
-        printf("[Persistence] Saved score with timestamp for %s\n", name);
+        printf("[Persistence] SUCCESS! Saved score to scores.txt\n");
+    } else {
+        perror("[Persistence] ERROR: Could not open scores.txt");
     }
 }
 
@@ -241,6 +265,10 @@ void handle_client_session(int client_socket, int player_id) {
                     // Rule: If Card Value is 13 (King) or 14 (Ace), they WIN.
                     if (drawn.value >= 13) {
                          printf("\n!!! PLAYER %d WINS with %d%c !!!\n", player_id + 1, drawn.value, drawn.suit);
+                         // ADD THIS:
+                        char log_msg[100];
+                        sprintf(log_msg, "GAME OVER: Player %d Wins with %d%c", player_id + 1, drawn.value, drawn.suit);
+                        log_event(log_msg);
                          
                          // 1. Save Score to File (Persistence)
                          char p_name[32];
@@ -326,6 +354,73 @@ void* scheduler_thread(void* arg) {
     return NULL;
 }
 
+// --- LOGGER HELPER (Producers) ---
+// Any process can call this to queue a message [cite: 46]
+void log_event(char *msg) {
+    pthread_mutex_lock(&game_state->log_mutex);
+    
+    if (game_state->log_count < 50) {
+        // Copy message into the shared circular buffer
+        strncpy(game_state->log_queue[game_state->log_in], msg, 255);
+        game_state->log_queue[game_state->log_in][255] = '\0'; // Safety null
+        
+        // Move "In" Index forward (Circular logic)
+        game_state->log_in = (game_state->log_in + 1) % 50;
+        game_state->log_count++;
+        
+        // Wake up the logger thread
+        pthread_cond_signal(&game_state->log_cond);
+    } 
+    // If full, we drop the log to remain Non-Blocking [cite: 52]
+    
+    pthread_mutex_unlock(&game_state->log_mutex);
+}
+
+// --- LOGGER THREAD (Consumer) ---
+// [cite: 44] Writes to game.log
+void* logger_thread(void* arg) {
+    printf("[Logger] Thread Started. Writing to game.log...\n");
+    
+    // Open file in Append mode
+    FILE *fp = fopen("game.log", "a");
+    if (!fp) {
+        perror("Failed to open game.log");
+        return NULL;
+    }
+
+    while (1) {
+        pthread_mutex_lock(&game_state->log_mutex);
+
+        // Wait until there is a message
+        while (game_state->log_count == 0) {
+            pthread_cond_wait(&game_state->log_cond, &game_state->log_mutex);
+        }
+
+        // Get the message from the queue
+        char buffer[256];
+        strncpy(buffer, game_state->log_queue[game_state->log_out], 256);
+        
+        // Move "Out" Index forward
+        game_state->log_out = (game_state->log_out + 1) % 50;
+        game_state->log_count--;
+
+        pthread_mutex_unlock(&game_state->log_mutex);
+
+        // --- WRITE TO FILE (Done without lock!) ---
+        // We get the timestamp here
+        time_t now = time(NULL);
+        char timestamp[26];
+        ctime_r(&now, timestamp);
+        timestamp[strlen(timestamp)-1] = '\0'; // Remove newline
+
+        fprintf(fp, "[%s] %s\n", timestamp, buffer);
+        fflush(fp); // Ensure it saves immediately
+    }
+
+    fclose(fp);
+    return NULL;
+}
+
 // --- 3. MAIN LOOP (Rubric: Multiprocessing - Excellent) ---
 int main() {
 
@@ -344,6 +439,12 @@ int main() {
         exit(1);
     }
 
+    // --- NEW: START LOGGER THREAD ---
+    pthread_t log_thr;
+    if (pthread_create(&log_thr, NULL, logger_thread, NULL) != 0) {
+        perror("Failed to create logger");
+        exit(1);    
+    }
     int server_fd = setup_server_socket();
     printf("[Server] Listening on port %d...\n", PORT);
 
@@ -377,6 +478,11 @@ int main() {
         
         printf("[Server] Accepted connection. Assigned Player ID: %d\n", new_player_id + 1);
         pthread_mutex_unlock(&game_state->mutex);
+
+        // ADD THIS:
+        char log_msg[100];
+        sprintf(log_msg, "Player %d connected via TCP.", new_player_id + 1);
+        log_event(log_msg);        
 
         // C. FORK [cite: 33]
         pid_t pid = fork();
@@ -419,4 +525,4 @@ int main() {
     // Cleanup (unreachable in this loop, but good practice)
     shm_unlink(SHM_NAME);
     return 0;
-}
+} 

@@ -54,13 +54,19 @@ typedef struct {
     int current_turn_index;     // Controlled by RR Scheduler Thread 
     GameStatus status;
     
-    // Deck Management (Server-side randomness) [cite: 29]
+    // Deck Management (Server-side randomness) 
     Card deck[DECK_SIZE];
     int deck_top_index;
     
-    // Logger Queue (Optional: Shared buffer for the Logger Thread)
-    char log_buffer[256];
-    bool new_log_available;
+    // --- NEW: LOGGER QUEUE (Rubric: Concurrent Logger) ---
+    // [cite: 53] Protected by log_mutex
+    char log_queue[50][256]; // Buffer for 50 messages
+    int log_in;              // Where to write next
+    int log_out;             // Where to read next
+    int log_count;           // How many messages are waiting
+    
+    pthread_mutex_t log_mutex;
+    pthread_cond_t log_cond;
     
 } SharedState;
 
