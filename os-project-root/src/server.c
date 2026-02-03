@@ -282,7 +282,25 @@ void handle_client_session(int client_socket, int player_id) {
                         // --- ADD THIS LINE HERE ---
                          sleep(1); // Give the message time to reach the client!
                          // ---------------------------                         
+
+                        // --- NEW: RESET THE GAME FOR ROUND 2 ---
+                         [cite_start]// We are still holding the mutex, so this is safe! [cite: 32]
+                         printf("[Server] Wiping game state for next round...\n");
                          
+                         game_state->player_count = 0;             // Kick everyone out (logically)
+                         game_state->deck_top_index = 0;           // Reset Deck
+                         game_state->current_turn_index = 0;       // Reset Turn
+                         game_state->status = WAITING_FOR_PLAYERS; // Open the doors again
+
+                         // RESHUFFLE THE DECK (Simple Fisher-Yates)
+                         for (int i = 0; i < 52; i++) {
+                             int r = rand() % 52;
+                             Card temp = game_state->deck[i];
+                             game_state->deck[i] = game_state->deck[r];
+                             game_state->deck[r] = temp;
+                         }
+                         // ---------------------------------------                         
+
                          // 3. IMPORTANT: Unlock Mutex before exiting!
                          // If we exit while holding the lock, the whole game freezes.
                          pthread_mutex_unlock(&game_state->mutex);
