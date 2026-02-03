@@ -284,7 +284,7 @@ void handle_client_session(int client_socket, int player_id) {
                          // ---------------------------                         
 
                         // --- NEW: RESET THE GAME FOR ROUND 2 ---
-                         [cite_start]// We are still holding the mutex, so this is safe! [cite: 32]
+                         // We are still holding the mutex, so this is safe!
                          printf("[Server] Wiping game state for next round...\n");
                          
                          game_state->player_count = 0;             // Kick everyone out (logically)
@@ -299,7 +299,7 @@ void handle_client_session(int client_socket, int player_id) {
                              game_state->deck[i] = game_state->deck[r];
                              game_state->deck[r] = temp;
                          }
-                         // ---------------------------------------                         
+                         // ---------------------------------------                    
 
                          // 3. IMPORTANT: Unlock Mutex before exiting!
                          // If we exit while holding the lock, the whole game freezes.
