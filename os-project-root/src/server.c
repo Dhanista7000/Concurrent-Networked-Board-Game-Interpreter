@@ -278,6 +278,10 @@ void handle_client_session(int client_socket, int player_id) {
                          // 2. Notify the Client
                          char win_msg[] = "YOU WON! Game Over.\n";
                          send(client_socket, win_msg, strlen(win_msg), 0);
+
+                        // --- ADD THIS LINE HERE ---
+                         sleep(1); // Give the message time to reach the client!
+                         // ---------------------------                         
                          
                          // 3. IMPORTANT: Unlock Mutex before exiting!
                          // If we exit while holding the lock, the whole game freezes.
