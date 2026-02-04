@@ -1,3 +1,198 @@
-# Concurrent-Networked-Board-Game-Interpreter
-### Operating-System-Assignment 
-### Mandatory instructions
+# Concurrent Networked Board Game Server
+
+A high-performance multiplayer card game engine implemented in C, demonstrating advanced Operating Systems concepts including multiprocessing, multithreading, Inter-Process Communication (IPC), and TCP networking.
+
+## Features
+
+* **Hybrid Concurrency Architecture**: Combines `fork()` for robust client isolation and `pthreads` for efficient background tasks.
+* **Round Robin Scheduler**: Dedicated thread ensures fair turn management across all connected processes.
+* **Real-time Logging**: Non-blocking logger thread asynchronously writes game events to `game.log`.
+* **Atomic Persistence**: Thread-safe file I/O saves winner statistics to `scores.txt` using mutex locks.
+* **Networked Gameplay**: Supports LAN multiplayer via TCP sockets (Multi-Machine Mode).
+* **Shared Memory Management**: Uses `mmap` and POSIX shared memory for ultra-fast state synchronization.
+
+## Project Structure
+
+```bash
+os-project-root/
+├── src/
+│   ├── server.c           # Main server logic (Fork, Scheduler, Logger, Signals)
+│   ├── common.h           # Shared data structures, constants, and headers  
+│   └── client.c           # Client application (TCP connectivity, User Input)
+├── Makefile               # Automated compilation script
+├── .gitignore             # Keeps history of log in time and win status
+├── scores.txt             # Persistent database for player scores
+└── game.log               # Live event log history
+
+```
+
+## Technology Stack
+
+* **Language**: C (C99 Standard)
+* **Compiler**: GCC
+* **Concurrency**: POSIX Threads (`pthread`), `fork()`
+* **IPC**: POSIX Shared Memory (`shm_open`, `mmap`), Mutexes, Condition Variables
+* **Networking**: TCP/IP Sockets
+* **Platform**: Linux / WSL (Ubuntu)
+
+## Getting Started
+
+### Prerequisites
+
+* GCC Compiler
+* Make
+* Linux Environment (or WSL on Windows)
+* Be in the right path (place saved in PC)
+* **Network:** All devices must be connected to the same **Mobile Hotspot** or **Wi-Fi Network** for multiplayer.
+
+### Quick Start
+
+**1. Compile the project:**
+
+```bash
+make clean && make
+
+```
+
+**2. Start the Server:**
+
+```bash
+./server
+
+```
+
+*The server will initialize shared memory and listen on Port 8080.*
+
+**3. Connect Clients (Players):**
+
+Open a new terminal for each player and run:
+
+```bash
+./client 127.0.0.1 
+```
+
+*(For multi-machine play, see the "Running the Application" section).*
+
+## System Architecture
+
+The application uses a **Hybrid Model** where `fork()` handles client connections and `pthreads` handle background orchestration.
+
+### Shared Memory Layout
+
+All game state is stored in a `SharedState` struct accessible by all processes:
+
+* **Deck Array**: 52 `Card` structs (Suit + Value).
+* **Player Stats**: IDs, PIDs, and Connection Status.
+* **Turn Logic**: Mutexes (`pthread_mutex_t`) and Condition Variables (`pthread_cond_t`).
+
+### Synchronization Strategy
+
+* **Process-Shared Mutexes**: Protects the Deck and File I/O from race conditions.
+* **Condition Variables**: Used to put players to "sleep" until the Scheduler wakes them up for their turn.
+
+### Persistence (Scores)
+
+The `scores.txt` file is loaded into memory on startup and updated atomically when a player wins.
+
+* **Format**: `[Timestamp] Winner: PlayerX | Score: 100`
+
+## Running the Application
+
+### Option A: Local Mode (Single PC Testing)
+Run the server and multiple clients on the same machine using the loopback address.
+
+**Terminal 1 (Server):**
+```bash
+./server
+```
+
+**Terminal 2, 3, 4 (Clients):**
+
+```bash
+./client 127.0.0.1 
+
+```
+
+### Option B: Multi-Machine Mode (LAN/Hotspot)
+**IMPORTANT: Ensure the Server Laptop and all Client Laptops are connected to the same Mobile Hotspot or Wi-Fi network.**
+
+**1. On the Server Machine:**
+Get your local IP address:
+
+```bash
+hostname -I
+
+```
+
+*(Example Output: 10.168.1.105)*
+
+Run the server:
+
+```bash
+./server
+
+```
+
+**2. On Client Machines:**
+Connect using the Server's IP:
+
+```bash
+./client 10.168.1.105
+
+```
+
+## Usage
+
+1. **Join Game**: Connect 3-5 players to start the session.
+2. **Gameplay**:
+* Wait for the prompt: `YOUR_TURN`.
+* Type **`DRAW`** to take a card.
+* Type **`PASS`** to skip.
+
+
+3. **Winning Condition**:
+* **King (13)** or **Ace (14)** = **INSTANT WIN**.
+* The server automatically saves the score and resets the deck for the next round.
+
+
+## Troubleshooting
+
+**Error: "Address already in use"**
+
+* The previous server process is still running.
+* Fix: Run `killall -9 server` or wait 60 seconds.
+
+**Error: "Permission denied" (scores.txt)**
+
+* File permissions issue.
+* Fix: Run `chmod 777 scores.txt` or `chmod +w .`
+
+**Timestamps are wrong in logs**
+
+* Your Linux timezone is set to UTC.
+* Fix: Run `sudo timedatectl set-timezone Asia/Kuala_Lumpur`.
+
+## Version Control (.gitignore)
+
+The `.gitignore` file is configured to keep the repository clean:
+
+* **Executables** - `server`, `client` (auto-generated by Make)
+* **Object files** - `*.o`
+* **Temporary Logs** - `game.log` (stores history)
+* **System files** - `.DS_Store`
+
+**Commit to repository:**
+
+* Source code (`src/*.c`)
+* Headers (`include/*.h`)
+* `Makefile`
+* `scores.txt` (Initial empty file)
+* `README.md`
+
+## License
+
+This project is submitted as part of the Operating Systems (OS) coursework at MMU.
+
+## Contributing
+
+For questions regarding the architecture or specific implementations of the Round Robin Scheduler, please contact the project team.
